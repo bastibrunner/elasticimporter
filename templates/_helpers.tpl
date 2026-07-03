@@ -43,6 +43,22 @@ app.kubernetes.io/instance: {{ .Release.Name | quote }}
 {{- regexReplaceAll "[^a-z0-9-]+" (lower .) "-" | trimAll "-" | trunc 45 | trimSuffix "-" -}}
 {{- end -}}
 
+{{- define "elastic-api-importer.scriptFromConfigMap" -}}
+{{- if eq (default "image" .Values.importer.script.source) "configmap" -}}true{{- end -}}
+{{- end -}}
+
+{{- define "elastic-api-importer.scriptChecksum" -}}
+{{- if include "elastic-api-importer.scriptFromConfigMap" . -}}
+{{- .Files.Get "scripts/importer.py" | sha256sum -}}
+{{- else -}}
+{{- $ref := printf "%s:%s" .Values.importer.image.repository .Values.importer.image.tag -}}
+{{- if .Values.importer.image.digest -}}
+{{- $ref = printf "%s@%s" .Values.importer.image.repository .Values.importer.image.digest -}}
+{{- end -}}
+{{- $ref | sha256sum -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "elastic-api-importer.payloadConfigMapName" -}}
 {{- $root := index . 0 -}}
 {{- $item := index . 1 -}}

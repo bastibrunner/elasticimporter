@@ -1,0 +1,9 @@
+.git
+tmp
+.cursor
+templates
+Chart.yaml
+values.yaml
+examples
+README.md
+*.md

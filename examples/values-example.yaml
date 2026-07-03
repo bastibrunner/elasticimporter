@@ -22,6 +22,17 @@ apiImports:
         "color": "#00BFB3"
       }
 
+  - name: logs-data-view
+    kind: data-view
+    id: "logs-data-view"
+    space: observability
+    payload: |-
+      {
+        "title": "logs-*",
+        "name": "Logs",
+        "timeFieldName": "@timestamp"
+      }
+
   - name: logs-dashboard
     kind: dashboard
     id: "logs-overview"

@@ -440,6 +440,87 @@ class SavedSearchHandler(SavedObjectHandler):
     object_type = "search"
 
 
+class DataViewHandler(ResourceHandler):
+    kind = "data-view"
+    api = "kibana"
+
+    @staticmethod
+    def _space_prefix(space: str) -> str:
+        if not space or space == "default":
+            return ""
+        return f"/s/{quote_path(space)}"
+
+    def _path(self, resource_id: str = "", space: str = "") -> str:
+        base = f"{self._space_prefix(space)}/api/data_views/data_view"
+        if resource_id:
+            return f"{base}/{quote_path(resource_id)}"
+        return base
+
+    @staticmethod
+    def _payload_parts(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], bool, Optional[bool]]:
+        body = copy.deepcopy(payload)
+        override = bool(body.pop("override", False))
+        refresh_fields = body.pop("refresh_fields", None)
+        if isinstance(body.get("data_view"), dict):
+            data_view = body.pop("data_view")
+        else:
+            data_view = body
+        return data_view, override, refresh_fields
+
+    def resolve_id(self, payload: Dict[str, Any], manifest: Dict[str, Any]) -> str:
+        data_view, _, _ = self._payload_parts(payload)
+        resource_id = str(manifest.get("id") or data_view.get("id") or "").strip()
+        if not resource_id:
+            raise ValueError(f"Data view {manifest.get('name')} requires manifest.id or payload.id")
+        return resource_id
+
+    def _request_body(self, resource: DesiredResource, *, create: bool) -> Dict[str, Any]:
+        data_view, override, refresh_fields = self._payload_parts(resource.payload)
+        if create:
+            data_view.setdefault("id", resource.resource_id)
+            body: Dict[str, Any] = {"data_view": data_view}
+            if override:
+                body["override"] = True
+            return body
+
+        data_view.pop("id", None)
+        data_view.pop("namespaces", None)
+        body = {"data_view": data_view}
+        if refresh_fields is not None:
+            body["refresh_fields"] = refresh_fields
+        return body
+
+    def get_current(self, resource: DesiredResource) -> Optional[Any]:
+        status, response = self.kibana.get(self._path(resource.resource_id, resource.space), expected=(200, 404))
+        return None if status == 404 else response
+
+    def create(self, resource: DesiredResource) -> None:
+        self.kibana.post(self._path(space=resource.space), body=self._request_body(resource, create=True), expected=(200,))
+
+    def update(self, resource: DesiredResource) -> None:
+        self.kibana.post(
+            self._path(resource.resource_id, resource.space),
+            body=self._request_body(resource, create=False),
+            expected=(200,),
+        )
+
+    def delete(self, state_entry: Mapping[str, Any]) -> None:
+        resource_id = str(state_entry["id"])
+        space = str(state_entry.get("space") or "")
+        self.kibana.delete(self._path(resource_id, space), expected=(204, 404))
+
+    def normalize_api_response(self, response: Any) -> Any:
+        if isinstance(response, dict) and isinstance(response.get("data_view"), dict):
+            data_view = copy.deepcopy(response["data_view"])
+        elif isinstance(response, dict):
+            data_view = copy.deepcopy(response)
+        else:
+            return response
+        # Field lists are refreshed from Elasticsearch and should not drive reconciliation.
+        data_view.pop("fields", None)
+        return without_empty(data_view)
+
+
 class MLJobHandler(ResourceHandler):
     kind = "ml-job"
     api = "elasticsearch"
@@ -497,6 +578,10 @@ class MLJobHandler(ResourceHandler):
 
 HANDLER_TYPES = {
     "space": SpaceHandler,
+    "data-view": DataViewHandler,
+    "data_view": DataViewHandler,
+    "index-pattern": DataViewHandler,
+    "index_pattern": DataViewHandler,
     "dashboard": DashboardHandler,
     "saved-search": SavedSearchHandler,
     "saved_search": SavedSearchHandler,
@@ -508,6 +593,7 @@ HANDLER_TYPES = {
 
 RESOURCE_PRIORITY = {
     "space": 10,
+    "data-view": 15,
     "dashboard": 20,
     "saved-search": 30,
     "ml-job": 40,

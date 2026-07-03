@@ -9,11 +9,12 @@ It renders payloads into labeled ConfigMaps, mounts them into a post-install/pos
 | Kind | API | Resource |
 |---|---|---|
 | `space` | Kibana | `/api/spaces/space` |
+| `data-view` | Kibana | `/api/data_views/data_view/{id}` |
 | `dashboard` | Kibana | `/api/dashboards/{id}` |
 | `saved-search` | Kibana | saved object type `search` |
 | `ml-job` | Elasticsearch | `/_ml/anomaly_detectors/{job_id}` |
 
-Aliases accepted by the script: `saved_search`, `search`, `ml_job`, `machine-learning-job`.
+Aliases accepted by the script: `data_view`, `index-pattern`, `index_pattern`, `saved_search`, `search`, `ml_job`, `machine-learning-job`.
 
 ## State model
 
@@ -50,6 +51,8 @@ The API response hash is calculated after a create/update follow-up GET. That ca
 ## Important limitations
 
 Kubernetes cannot natively mount "all ConfigMaps matching a label" into a Pod. This chart therefore renders the payload ConfigMaps from `.Values.apiImports` and mounts exactly those ConfigMaps. They are still labeled with `itd.nrw.de/api-import: <kind>` by default, so the label remains the contract for ownership and inspection.
+
+Data views use the Kibana Data Views API (`/api/data_views/data_view`). Payloads can be flat data view fields (`title`, `name`, `timeFieldName`, ...) or wrapped in a `data_view` object. Optional top-level keys `override` (create) and `refresh_fields` (update) are passed through to the API.
 
 Dashboards use the Kibana Dashboards API (`/api/dashboards`). Saved searches still use the legacy saved-object API because Elastic has not published a replacement for that object type yet. Dashboard payloads should follow the Dashboards API schema (`title`, `panels`, `options`, ...). The importer still accepts legacy saved-object `attributes` payloads for dashboards and converts simple empty-dashboard definitions automatically.
 

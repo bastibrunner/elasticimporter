@@ -9,7 +9,7 @@ metadata:
     {{- toYaml . | nindent 4 }}
     {{- end }}
   annotations:
-    checksum/script: {{ .Files.Get "scripts/importer.py" | sha256sum | quote }}
+    checksum/script: {{ include "elastic-api-importer.scriptChecksum" . | quote }}
     checksum/payloads: {{ toYaml .Values.apiImports | sha256sum | quote }}
     {{- if .Values.job.hook }}
     {{- toYaml .Values.job.hookAnnotations | nindent 4 }}
@@ -29,7 +29,7 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
       annotations:
-        checksum/script: {{ .Files.Get "scripts/importer.py" | sha256sum | quote }}
+        checksum/script: {{ include "elastic-api-importer.scriptChecksum" . | quote }}
         checksum/payloads: {{ toYaml .Values.apiImports | sha256sum | quote }}
         {{- with .Values.job.podAnnotations }}
         {{- toYaml . | nindent 8 }}
@@ -53,7 +53,7 @@ spec:
       {{- end }}
       containers:
         - name: importer
-          image: "{{ .Values.importer.image.repository }}:{{ .Values.importer.image.tag }}"
+          image: "{{ .Values.importer.image.repository }}{{- if .Values.importer.image.digest -}}@{{ .Values.importer.image.digest }}{{- else -}}:{{ .Values.importer.image.tag }}{{- end -}}"
           imagePullPolicy: {{ .Values.importer.image.pullPolicy }}
           command: ["python", "/app/importer.py"]
           securityContext:
@@ -150,9 +150,11 @@ spec:
                   optional: true
             {{- end }}
           volumeMounts:
+            {{- if include "elastic-api-importer.scriptFromConfigMap" . }}
             - name: script
               mountPath: /app
               readOnly: true
+            {{- end }}
             {{- range .Values.apiImports }}
             {{- if (default true .enabled) }}
             - name: payload-{{ include "elastic-api-importer.safeName" .name }}
@@ -173,10 +175,12 @@ spec:
           resources:
             {{- toYaml .Values.job.resources | nindent 12 }}
       volumes:
+        {{- if include "elastic-api-importer.scriptFromConfigMap" . }}
         - name: script
           configMap:
             name: {{ include "elastic-api-importer.fullname" . }}-script
             defaultMode: 0444
+        {{- end }}
         {{- range .Values.apiImports }}
         {{- if (default true .enabled) }}
         - name: payload-{{ include "elastic-api-importer.safeName" .name }}

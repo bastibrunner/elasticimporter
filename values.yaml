@@ -35,9 +35,14 @@ connections:
   verifyTls: true
 
 importer:
+  script:
+    # `image` runs importer.py baked into importer.image (default).
+    # `configmap` mounts scripts/importer.py from a chart-rendered ConfigMap.
+    source: image
   image:
-    repository: "python"
-    tag: "3.12-alpine"
+    repository: "elastic-api-importer"
+    tag: "0.1.0"
+    digest: ""
     pullPolicy: IfNotPresent
   deleteRemoved: true
   dryRun: false
@@ -87,7 +92,7 @@ gitops:
   disableDelete: false
 
 # Payload resources rendered into labeled ConfigMaps and mounted into the Job.
-# Payloads must be JSON. Supported kinds: space, dashboard, saved-search, ml-job.
+# Payloads must be JSON. Supported kinds: space, data-view, dashboard, saved-search, ml-job.
 apiImports:
   - name: observability-space
     kind: space
@@ -100,6 +105,18 @@ apiImports:
         "description": "Observability dashboards and searches",
         "initials": "OB",
         "color": "#00BFB3"
+      }
+
+  - name: example-data-view
+    kind: data-view
+    id: "example-logs-data-view"
+    space: observability
+    enabled: false
+    payload: |-
+      {
+        "title": "logs-*",
+        "name": "Example logs data view",
+        "timeFieldName": "@timestamp"
       }
 
   - name: example-dashboard

@@ -1,0 +1,6 @@
+apiVersion: v2
+name: elastic-api-importer
+description: Helm post-deploy API importer for ECK-managed Elastic/Kibana resources
+version: 0.1.0
+appVersion: "0.1.0"
+type: application

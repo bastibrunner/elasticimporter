@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "elastic-api-importer.fullname" . }}-script
+  labels:
+    {{- include "elastic-api-importer.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api-import-script
+data:
+  importer.py: |-
+{{ .Files.Get "scripts/importer.py" | indent 4 }}

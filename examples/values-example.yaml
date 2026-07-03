@@ -1,0 +1,80 @@
+connections:
+  kibana:
+    url: "https://quickstart-kb-http:5601"
+    caSecretName: "quickstart-kb-http-certs-public"
+  elasticsearch:
+    url: "https://quickstart-es-http:9200"
+    caSecretName: "quickstart-es-http-certs-public"
+
+credentials:
+  existingSecret: "elastic-api-importer-credentials"
+
+apiImports:
+  - name: observability-space
+    kind: space
+    id: observability
+    payload: |-
+      {
+        "id": "observability",
+        "name": "Observability",
+        "description": "Managed by Helm",
+        "initials": "OB",
+        "color": "#00BFB3"
+      }
+
+  - name: logs-dashboard
+    kind: dashboard
+    id: "logs-overview"
+    space: observability
+    payload: |-
+      {
+        "title": "Logs overview",
+        "description": "Managed by Helm",
+        "panels": [],
+        "options": {
+          "use_margins": true,
+          "sync_colors": false,
+          "sync_cursor": true,
+          "sync_tooltips": false
+        },
+        "query": {
+          "language": "kuery",
+          "query": ""
+        }
+      }
+
+  - name: failed-login-search
+    kind: saved-search
+    id: "failed-login-search"
+    space: observability
+    payload: |-
+      {
+        "attributes": {
+          "title": "Failed login events",
+          "columns": ["@timestamp", "user.name", "source.ip", "event.action"],
+          "sort": [["@timestamp", "desc"]],
+          "kibanaSavedObjectMeta": {
+            "searchSourceJSON": "{\"query\":{\"query\":\"event.action: login_failed\",\"language\":\"kuery\"},\"filter\":[]}"
+          }
+        },
+        "references": []
+      }
+
+  - name: auth-event-count-ml-job
+    kind: ml-job
+    id: "auth-event-count"
+    replaceOnUpdate: false
+    payload: |-
+      {
+        "description": "Authentication event volume",
+        "groups": ["gitops", "auth"],
+        "analysis_config": {
+          "bucket_span": "15m",
+          "detectors": [
+            {"function": "count", "detector_description": "event count"}
+          ]
+        },
+        "data_description": {
+          "time_field": "@timestamp"
+        }
+      }

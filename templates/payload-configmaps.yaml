@@ -1,0 +1,29 @@
+{{- $root := . -}}
+{{- range .Values.apiImports }}
+{{- if (default true .enabled) }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "elastic-api-importer.payloadConfigMapName" (list $root .) }}
+  labels:
+    {{- include "elastic-api-importer.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: api-import-payload
+    {{ $root.Values.payloadLabelKey }}: {{ .kind | quote }}
+  annotations:
+    elastic-api-importer/payload-sha256: {{ .payload | sha256sum | quote }}
+data:
+  manifest.json: |-
+    {
+      "name": {{ .name | quote }},
+      "kind": {{ .kind | quote }},
+      "id": {{ default "" .id | quote }},
+      "space": {{ default "" .space | quote }},
+      "delete": {{ default true .delete }},
+      "replaceOnUpdate": {{ default false .replaceOnUpdate }},
+      "configMap": {{ include "elastic-api-importer.payloadConfigMapName" (list $root .) | quote }}
+    }
+  payload.json: |-
+{{ .payload | indent 4 }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,165 @@
+# Default values for elastic-api-importer.
+
+nameOverride: ""
+fullnameOverride: ""
+
+payloadLabelKey: "itd.nrw.de/api-import"
+stateSecretName: "applied-configuration"
+
+# Existing Secret containing API credentials. Keys are configurable below.
+# Supported auth modes:
+# - api key: set kibanaApiKeyKey / elasticsearchApiKeyKey
+# - basic auth: set username/password keys
+credentials:
+  existingSecret: "elastic-api-importer-credentials"
+  kibanaApiKeyKey: "kibanaApiKey"
+  kibanaUsernameKey: "kibanaUsername"
+  kibanaPasswordKey: "kibanaPassword"
+  elasticsearchApiKeyKey: "elasticsearchApiKey"
+  elasticsearchUsernameKey: "elasticsearchUsername"
+  elasticsearchPasswordKey: "elasticsearchPassword"
+  # Optional fallback keys used for both APIs when the API-specific keys above are not present.
+  apiKeyKey: "apiKey"
+  usernameKey: "username"
+  passwordKey: "password"
+
+connections:
+  kibana:
+    url: "https://quickstart-kb-http:5601"
+    caSecretName: ""       # Example: quickstart-kb-http-certs-public
+    caKey: "ca.crt"
+  elasticsearch:
+    url: "https://quickstart-es-http:9200"
+    caSecretName: ""       # Example: quickstart-es-http-certs-public
+    caKey: "ca.crt"
+  verifyTls: true
+
+importer:
+  image:
+    repository: "python"
+    tag: "3.12-alpine"
+    pullPolicy: IfNotPresent
+  deleteRemoved: true
+  dryRun: false
+  logLevel: "INFO"
+  payloadDir: "/payloads"
+  timeoutSeconds: 60
+  # Applies to Kibana saved-object deletes. Needed if the object exists in multiple namespaces.
+  forceDeleteSavedObjects: false
+
+job:
+  annotations: {}
+  labels: {}
+  hook: true
+  hookAnnotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 300
+  restartPolicy: Never
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    fsGroup: 65532
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+  resources: {}
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+gitops:
+  # If true, the importer refuses to delete objects that are no longer present in the chart.
+  # Useful for first rollout while you verify state capture.
+  disableDelete: false
+
+# Payload resources rendered into labeled ConfigMaps and mounted into the Job.
+# Payloads must be JSON. Supported kinds: space, dashboard, saved-search, ml-job.
+apiImports:
+  - name: observability-space
+    kind: space
+    id: observability
+    enabled: false
+    payload: |-
+      {
+        "id": "observability",
+        "name": "Observability",
+        "description": "Observability dashboards and searches",
+        "initials": "OB",
+        "color": "#00BFB3"
+      }
+
+  - name: example-dashboard
+    kind: dashboard
+    id: "example-dashboard-id"
+    space: observability
+    enabled: false
+    payload: |-
+      {
+        "title": "Example dashboard",
+        "description": "Managed by Helm",
+        "panels": [],
+        "options": {
+          "use_margins": true,
+          "sync_colors": false,
+          "sync_cursor": true,
+          "sync_tooltips": false
+        },
+        "query": {
+          "language": "kuery",
+          "query": ""
+        }
+      }
+
+  - name: example-saved-search
+    kind: saved-search
+    id: "example-saved-search-id"
+    space: observability
+    enabled: false
+    payload: |-
+      {
+        "attributes": {
+          "title": "Example saved search",
+          "description": "Managed by Helm",
+          "columns": ["@timestamp", "message"],
+          "sort": [["@timestamp", "desc"]],
+          "kibanaSavedObjectMeta": {
+            "searchSourceJSON": "{\"query\":{\"query\":\"*\",\"language\":\"kuery\"},\"filter\":[]}"
+          }
+        },
+        "references": []
+      }
+
+  - name: example-ml-job
+    kind: ml-job
+    id: "example-ml-job"
+    enabled: false
+    # replaceOnUpdate deletes and recreates the ML job when the generic _update API cannot apply changed immutable fields.
+    # This deletes ML results/model state, so it is disabled by default.
+    replaceOnUpdate: false
+    payload: |-
+      {
+        "description": "Example ML job managed by Helm",
+        "analysis_config": {
+          "bucket_span": "15m",
+          "detectors": [
+            {"function": "count"}
+          ]
+        },
+        "data_description": {
+          "time_field": "@timestamp"
+        }
+      }

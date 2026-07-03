@@ -15,7 +15,6 @@ import json
 import logging
 import os
 import ssl
-import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -65,23 +64,6 @@ def without_empty(value: Dict[str, Any]) -> Dict[str, Any]:
 
 def quote_path(value: str) -> str:
     return parse.quote(value, safe="")
-
-
-def kibana_space_prefix(space: str) -> str:
-    if not space or space == "default":
-        return ""
-    return f"/s/{quote_path(space)}"
-
-
-DASHBOARD_API_HEADERS = {"elastic-api-version": "1"}
-
-SAVED_OBJECT_OPTIONS_KEY_MAP = {
-    "useMargins": "use_margins",
-    "syncColors": "sync_colors",
-    "syncCursor": "sync_cursor",
-    "syncTooltips": "sync_tooltips",
-    "hidePanelTitles": "hide_panel_titles",
-}
 
 
 class ApiError(RuntimeError):
@@ -183,39 +165,17 @@ class HttpClient:
                 return text
         return text
 
-    def get(
-        self,
-        path: str,
-        expected: Iterable[int] = (200,),
-        headers: Optional[Mapping[str, str]] = None,
-    ) -> Tuple[int, Any]:
-        return self.request("GET", path, headers=headers, expected=expected)
+    def get(self, path: str, expected: Iterable[int] = (200,)) -> Tuple[int, Any]:
+        return self.request("GET", path, expected=expected)
 
-    def post(
-        self,
-        path: str,
-        body: Any = None,
-        expected: Iterable[int] = (200, 201, 202),
-        headers: Optional[Mapping[str, str]] = None,
-    ) -> Tuple[int, Any]:
-        return self.request("POST", path, body=body, headers=headers, expected=expected)
+    def post(self, path: str, body: Any = None, expected: Iterable[int] = (200, 201, 202)) -> Tuple[int, Any]:
+        return self.request("POST", path, body=body, expected=expected)
 
-    def put(
-        self,
-        path: str,
-        body: Any = None,
-        expected: Iterable[int] = (200, 201, 202),
-        headers: Optional[Mapping[str, str]] = None,
-    ) -> Tuple[int, Any]:
-        return self.request("PUT", path, body=body, headers=headers, expected=expected)
+    def put(self, path: str, body: Any = None, expected: Iterable[int] = (200, 201, 202)) -> Tuple[int, Any]:
+        return self.request("PUT", path, body=body, expected=expected)
 
-    def delete(
-        self,
-        path: str,
-        expected: Iterable[int] = (200, 202, 204, 404),
-        headers: Optional[Mapping[str, str]] = None,
-    ) -> Tuple[int, Any]:
-        return self.request("DELETE", path, headers=headers, expected=expected)
+    def delete(self, path: str, expected: Iterable[int] = (200, 202, 204, 404)) -> Tuple[int, Any]:
+        return self.request("DELETE", path, expected=expected)
 
 
 class KubernetesSecretStore:
@@ -379,7 +339,7 @@ class SpaceHandler(ResourceHandler):
 
     def update(self, resource: DesiredResource) -> None:
         body = copy.deepcopy(resource.payload)
-        body.pop("id", None)  # The space id is immutable and comes from the URL.
+        body["id"] = resource.resource_id
         self.kibana.put(self._path(resource.resource_id), body=body, expected=(200,))
 
     def delete(self, state_entry: Mapping[str, Any]) -> None:
@@ -407,8 +367,14 @@ class SavedObjectHandler(ResourceHandler):
             raise ValueError(f"Saved object {manifest.get('name')} requires manifest.id or payload.id")
         return resource_id
 
+    @staticmethod
+    def _space_prefix(space: str) -> str:
+        if not space or space == "default":
+            return ""
+        return f"/s/{quote_path(space)}"
+
     def _path(self, resource_id: str, space: str = "") -> str:
-        return f"{kibana_space_prefix(space)}/api/saved_objects/{quote_path(self.object_type)}/{quote_path(resource_id)}"
+        return f"{self._space_prefix(space)}/api/saved_objects/{quote_path(self.object_type)}/{quote_path(resource_id)}"
 
     def _body(self, resource: DesiredResource, *, create: bool) -> Dict[str, Any]:
         payload = copy.deepcopy(resource.payload)
@@ -464,145 +430,9 @@ class SavedObjectHandler(ResourceHandler):
         )
 
 
-class DashboardHandler(ResourceHandler):
+class DashboardHandler(SavedObjectHandler):
     kind = "dashboard"
-    api = "kibana"
-
-    def resolve_id(self, payload: Dict[str, Any], manifest: Dict[str, Any]) -> str:
-        resource_id = str(manifest.get("id") or payload.get("id") or "").strip()
-        if not resource_id:
-            raise ValueError(f"Dashboard {manifest.get('name')} requires manifest.id or payload.id")
-        return resource_id
-
-    def _path(self, resource_id: str, space: str = "") -> str:
-        return f"{kibana_space_prefix(space)}/api/dashboards/{quote_path(resource_id)}"
-
-    @staticmethod
-    def _parse_json_field(value: Any, default: Any) -> Any:
-        if isinstance(value, str):
-            try:
-                return json.loads(value)
-            except json.JSONDecodeError:
-                return default
-        return value if value is not None else default
-
-    @classmethod
-    def _convert_saved_object_options(cls, options: Any) -> Dict[str, Any]:
-        parsed = cls._parse_json_field(options, {})
-        if not isinstance(parsed, dict):
-            return {}
-        converted: Dict[str, Any] = {}
-        for key, value in parsed.items():
-            converted[SAVED_OBJECT_OPTIONS_KEY_MAP.get(key, key)] = value
-        return converted
-
-    @classmethod
-    def _attributes_to_dashboard_state(cls, attributes: Mapping[str, Any]) -> Dict[str, Any]:
-        attrs = dict(attributes)
-        state: Dict[str, Any] = {}
-
-        for field in ("title", "description"):
-            if field in attrs:
-                state[field] = attrs[field]
-
-        panels = cls._parse_json_field(attrs.get("panelsJSON"), [])
-        if panels:
-            LOG.warning(
-                "Legacy saved-object panelsJSON is not converted to Dashboards API panel format; omitting panels"
-            )
-        else:
-            state["panels"] = []
-
-        if "optionsJSON" in attrs:
-            state["options"] = cls._convert_saved_object_options(attrs["optionsJSON"])
-
-        meta = attrs.get("kibanaSavedObjectMeta")
-        if isinstance(meta, dict) and "searchSourceJSON" in meta:
-            search_source = cls._parse_json_field(meta["searchSourceJSON"], {})
-            if isinstance(search_source, dict):
-                query = search_source.get("query")
-                if isinstance(query, dict):
-                    state["query"] = {
-                        "language": query.get("language", "kuery"),
-                        "query": query.get("query", ""),
-                    }
-
-        if attrs.get("timeRestore"):
-            time_range: Dict[str, Any] = {}
-            if attrs.get("timeFrom"):
-                time_range["from"] = attrs["timeFrom"]
-            if attrs.get("timeTo"):
-                time_range["to"] = attrs["timeTo"]
-            if time_range:
-                state["time_range"] = time_range
-
-        return state
-
-    def _body(self, resource: DesiredResource) -> Dict[str, Any]:
-        payload = copy.deepcopy(resource.payload)
-        for key in ("id", "type", "meta", "namespaces", "originId", "updated_at", "created_at", "version"):
-            payload.pop(key, None)
-
-        if isinstance(payload.get("data"), dict):
-            body = copy.deepcopy(payload["data"])
-        elif isinstance(payload.get("attributes"), dict):
-            body = self._attributes_to_dashboard_state(payload["attributes"])
-        elif "title" in payload or "panels" in payload:
-            body = payload
-        else:
-            raise ValueError(
-                f"Dashboard {resource.name} payload must use the Dashboards API schema "
-                "(title/panels/...) or legacy saved-object attributes"
-            )
-
-        body.pop("references", None)
-        body.setdefault("panels", [])
-        return body
-
-    def get_current(self, resource: DesiredResource) -> Optional[Any]:
-        status, response = self.kibana.get(
-            self._path(resource.resource_id, resource.space),
-            expected=(200, 404),
-            headers=DASHBOARD_API_HEADERS,
-        )
-        return None if status == 404 else response
-
-    def create(self, resource: DesiredResource) -> None:
-        self.kibana.put(
-            self._path(resource.resource_id, resource.space),
-            body=self._body(resource),
-            expected=(200, 201),
-            headers=DASHBOARD_API_HEADERS,
-        )
-
-    def update(self, resource: DesiredResource) -> None:
-        self.kibana.put(
-            self._path(resource.resource_id, resource.space),
-            body=self._body(resource),
-            expected=(200, 201),
-            headers=DASHBOARD_API_HEADERS,
-        )
-
-    def delete(self, state_entry: Mapping[str, Any]) -> None:
-        resource_id = str(state_entry["id"])
-        space = str(state_entry.get("space") or "")
-        self.kibana.delete(
-            self._path(resource_id, space),
-            expected=(200, 204, 404),
-            headers=DASHBOARD_API_HEADERS,
-        )
-
-    def normalize_api_response(self, response: Any) -> Any:
-        if not isinstance(response, dict):
-            return response
-        data = response.get("data")
-        if not isinstance(data, dict):
-            data = {}
-        normalized_data = copy.deepcopy(data)
-        for panel in normalized_data.get("panels") or []:
-            if isinstance(panel, dict):
-                panel.pop("uid", None)
-        return without_empty({"id": response.get("id"), "data": normalized_data})
+    object_type = "dashboard"
 
 
 class SavedSearchHandler(SavedObjectHandler):
@@ -676,6 +506,29 @@ HANDLER_TYPES = {
     "machine-learning-job": MLJobHandler,
 }
 
+RESOURCE_PRIORITY = {
+    "space": 10,
+    "dashboard": 20,
+    "saved-search": 30,
+    "ml-job": 40,
+}
+
+
+def ordered_desired_resources(
+    desired: Dict[str, Tuple[DesiredResource, ResourceHandler]],
+) -> List[Tuple[str, Tuple[DesiredResource, ResourceHandler]]]:
+    """Return desired resources in dependency order.
+
+    Spaces must exist before space-scoped Kibana saved objects. The
+    deterministic key fallback keeps hook runs stable across executions.
+    """
+    return sorted(
+        desired.items(),
+        key=lambda item: (
+            RESOURCE_PRIORITY.get(item[1][0].kind, 100),
+            item[0],
+        ),
+    )
 
 def load_payloads(payload_dir: Path, handlers: Mapping[str, ResourceHandler]) -> Dict[str, Tuple[DesiredResource, ResourceHandler]]:
     if not payload_dir.exists():
@@ -686,18 +539,30 @@ def load_payloads(payload_dir: Path, handlers: Mapping[str, ResourceHandler]) ->
         manifest_path = directory / "manifest.json"
         payload_path = directory / "payload.json"
         if not manifest_path.exists() or not payload_path.exists():
-            LOG.debug("Skipping %s; manifest.json or payload.json missing", directory)
+            LOG.warning("Skipping %s; manifest.json or payload.json missing", directory)
+            continue
+        LOG.info("Loading %s...", directory)
+
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            LOG.error("Error loading %s: %s",manifest_path,e)
+            continue
+        try:
+            raw_payload = payload_path.read_bytes()
+            payload = json.loads(raw_payload.decode("utf-8"))
+        except Exception as e:
+            LOG.error("Error loading %s: %s",payload_path,e)
             continue
 
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        raw_payload = payload_path.read_bytes()
-        payload = json.loads(raw_payload.decode("utf-8"))
         if not isinstance(payload, dict):
-            raise ValueError(f"Payload {payload_path} must be a JSON object")
+            LOG.error("Payload %s could not be parsed as dict. Skipping.", payload_path)
+            continue
 
         kind = str(manifest.get("kind", "")).strip()
         if kind not in handlers:
-            raise ValueError(f"Unsupported import kind {kind!r} in {manifest_path}")
+            LOG.error("Unsupported import kind \"%s\" in %s", kind, payload_path)
+            continue
 
         handler = handlers[kind]
         resource_id = handler.resolve_id(payload, manifest)
@@ -715,7 +580,9 @@ def load_payloads(payload_dir: Path, handlers: Mapping[str, ResourceHandler]) ->
         )
         key = handler.state_key(resource)
         if key in resources:
-            raise ValueError(f"Duplicate desired resource key {key}; check {directory}")
+            LOG.error("Duplicate desired resource key \"%s\" in %s", key, payload_path)
+            continue
+
         resources[key] = (resource, handler)
 
     LOG.info("Loaded %d desired resources from %s", len(resources), payload_dir)
@@ -837,7 +704,7 @@ def build_clients() -> Tuple[HttpClient, HttpClient]:
         api_key=os.getenv("KIBANA_API_KEY", "") or fallback_api_key,
         username=os.getenv("KIBANA_USERNAME", "") or fallback_username,
         password=os.getenv("KIBANA_PASSWORD", "") or fallback_password,
-        ca_file=os.getenv("KIBANA_CA_FILE", ""),
+        ca_file=os.getenv("KIBANA_CA_FILE", "") if "https" in os.getenv("KIBANA_URL", "").lower() else "",
         verify_tls=verify_tls,
         timeout=timeout,
         extra_headers={"kbn-xsrf": "elastic-api-importer"},
@@ -848,7 +715,7 @@ def build_clients() -> Tuple[HttpClient, HttpClient]:
         api_key=os.getenv("ELASTICSEARCH_API_KEY", "") or fallback_api_key,
         username=os.getenv("ELASTICSEARCH_USERNAME", "") or fallback_username,
         password=os.getenv("ELASTICSEARCH_PASSWORD", "") or fallback_password,
-        ca_file=os.getenv("ELASTICSEARCH_CA_FILE", ""),
+        ca_file=os.getenv("ELASTICSEARCH_CA_FILE", "") if "https" in os.getenv("ELASTICSEARCH_URL", "").lower() else "",
         verify_tls=verify_tls,
         timeout=timeout,
     )
@@ -879,11 +746,12 @@ def main() -> int:
         handlers[handler.kind] = handler
 
     desired = load_payloads(payload_dir, handlers)
+
     store = KubernetesSecretStore(namespace=namespace, secret_name=state_secret_name, dry_run=dry_run)
     state = store.load()
     state_resources = state.setdefault("resources", {})
 
-    for key, (resource, handler) in desired.items():
+    for key, (resource, handler) in ordered_desired_resources(desired):
         reconcile_resource(key, resource, handler, state_resources, dry_run=dry_run)
 
     if delete_removed_enabled:
